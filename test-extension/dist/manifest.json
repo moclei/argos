@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Argos",
+  "version": "1.0.0",
+  "description": "Test extension for browser-frame-tracker",
+  "permissions": ["tabs", "webNavigation", "scripting", "storage"],
+  "host_permissions": ["https://www.google.com/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

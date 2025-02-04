@@ -1,0 +1,42 @@
+{
+  "name": "argos",
+  "version": "1.0.0",
+  "description": "A web extension utility for tracking tabs and frames",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build:lib": "node esbuild.config.js",
+    "build": "npm run build:all && npm run test:extension",
+    "build:types": "tsc --project tsconfig.build.json",
+    "build:all": "npm run build:lib && npm run build:types",
+    "clean": "rimraf dist",
+    "prepare": "npm run clean && npm run build:all",
+    "test:extension": "cd test-extension && npm run build"
+  },
+  "keywords": [
+    "browser-extension",
+    "frames",
+    "tabs",
+    "webextension"
+  ],
+  "author": "Marc O Cleirigh",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/chrome": "^0.0.300",
+    "@types/node": "^22.13.0",
+    "@types/webextension-polyfill": "^0.10.7",
+    "esbuild": "^0.20.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "webextension-polyfill": "^0.10.0"
+  },
+  "peerDependencies": {
+    "webextension-polyfill": "^0.10.0"
+  }
+}
