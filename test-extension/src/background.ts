@@ -1,53 +1,54 @@
 import browser from "webextension-polyfill";
-import { StatefulTabFrameTracker } from "argos";
+import { VisibleFrameTracker } from "argos";
 
-interface TabState {
-  activatedDate: number | null;
-  isActive: boolean;
-}
-
-interface FrameState {
-  scanning: boolean;
-}
-
-const tracker = new StatefulTabFrameTracker<TabState, FrameState>({
+const tracker = new VisibleFrameTracker({
   useInjection: true,
-  defaultTabState: {
-    activatedDate: 0,
-    isActive: false,
-  },
-  defaultFrameState: {
-    scanning: false,
-  },
 });
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse: any) => {
   if (message.type === "GET_TABS") {
     console.log(`[ARGOS TEST:BG] Message received:`, message);
-    console.log(`[ARGOS TEST:BG] tracker.getAllTabs():`, tracker.getAllTabs());
-    const tabArray: any[] = [];
-    tracker.getAllTabs().forEach((value, key) => {
-      const frameArray = Array.from(value.frames.entries()).map(
-        ([frameId, frameInfo]) => {
-          return {
-            frameId,
-            frameInfo,
-          };
-        }
-      );
-      if (value.url.includes("google.com")) {
-        tabArray.push({
-          tabId: key,
-          tabInfo: value,
-          frames: frameArray,
-        });
-      }
-    });
 
-    console.log(`[ARGOS TEST:BG] tracker.getAllTabs():`, tabArray);
+    const activeTab = tracker.getActiveTab();
+    console.log(`[ARGOS TEST:BG] tracker.getActiveTab():`, activeTab);
+
     sendResponse({
       type: "TAB_RESPONSE",
-      payload: { tabs: tabArray },
+      payload: { tabs: [activeTab] },
     });
   }
 });
+
+tracker.subscribe((event) => {
+  console.log(`[ARGOS TEST:BG] Event received:`, event);
+  if (event.type === "visibility_changed") {
+    popupPort?.postMessage({
+      type: "FRAME_VISIBILITY_CHANGE",
+      payload: {
+        tabs: [tracker.getActiveTab()],
+      },
+    });
+  }
+});
+
+let popupPort: browser.Runtime.Port | null = null;
+browser.runtime.onConnect.addListener((port) => {
+  if (port.name === "argos-frame-tracker") {
+    console.log(`[ARGOS TEST:BG] Popup port connected`);
+    port.postMessage({
+      type: "FRAME_VISIBILITY_CHANGE",
+      payload: {
+        tabs: [tracker.getActiveTab()],
+      },
+    });
+    console.log(`[ARGOS TEST:BG] Initial message sent`);
+    popupPort = port;
+  }
+});
+
+if (popupPort) {
+  (popupPort as browser.Runtime.Port).onDisconnect.addListener(() => {
+    console.log(`[ARGOS TEST:BG] Popup port disconnected`);
+    popupPort = null;
+  });
+}

@@ -1,1 +1,1 @@
-export { StatefulTabFrameTracker } from "./stateful-tab-frame-tracker";
+export { VisibleFrameTracker } from "./visible-frame-tracker";

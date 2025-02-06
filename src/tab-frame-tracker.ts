@@ -3,17 +3,22 @@ import browser from "webextension-polyfill";
 export type CoreFrameInfo = {
   visible: boolean;
   url: string; // Maybe add this if we can get it from events
-  parentFrameId?: number; // Maybe add this for hierarchy tracking
 };
 
 type CoreTabInfo = {
   url: string;
   frames: Map<number, CoreFrameInfo>;
+  active: boolean;
 };
 
 type FrameMap = Map<number, CoreTabInfo>;
 
-type ChangeType = "added" | "removed" | "modified" | "visibility_changed";
+type ChangeType =
+  | "added"
+  | "removed"
+  | "modified"
+  | "visibility_changed"
+  | "tab_activated";
 
 type ChangeEvent = {
   type: ChangeType;
@@ -22,10 +27,12 @@ type ChangeEvent = {
   previousState?: {
     url?: string;
     visible?: boolean;
+    active?: boolean;
   };
   currentState?: {
     url?: string;
     visible?: boolean;
+    active?: boolean;
   };
 };
 
@@ -34,6 +41,7 @@ type ChangeListener = (event: ChangeEvent) => void;
 export class TabFrameTracker {
   public frameMap: FrameMap = new Map();
   private listeners: Set<ChangeListener> = new Set();
+  protected activeTabId: number | null = null;
 
   constructor() {
     this.initializeListeners();
@@ -45,7 +53,7 @@ export class TabFrameTracker {
 
   public subscribe(listener: ChangeListener): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener); // Returns unsubscribe function
+    return () => this.listeners.delete(listener);
   }
 
   private async initializeListeners() {
@@ -55,6 +63,7 @@ export class TabFrameTracker {
         this.frameMap.set(tab.id, {
           url: tab.url || "",
           frames: new Map([[0, { visible: true, url: tab.url || "" }]]),
+          active: false,
         });
 
         this.notifyListeners({
@@ -64,7 +73,31 @@ export class TabFrameTracker {
           currentState: {
             url: tab.url || "",
             visible: true,
+            active: false,
           },
+        });
+      }
+    });
+
+    browser.tabs.onActivated.addListener(async (activeInfo) => {
+      const previousTabId = this.activeTabId;
+      this.activeTabId = activeInfo.tabId;
+
+      if (previousTabId) {
+        const prevTab = this.frameMap.get(previousTabId);
+        if (prevTab) {
+          prevTab.active = false;
+        }
+      }
+
+      const newTab = this.frameMap.get(activeInfo.tabId);
+      if (newTab) {
+        newTab.active = true;
+        this.notifyListeners({
+          type: "tab_activated",
+          tabId: activeInfo.tabId,
+          previousState: { active: false },
+          currentState: { active: true },
         });
       }
     });
@@ -190,21 +223,21 @@ export class TabFrameTracker {
 
     // Initialize existing tabs
     const existingTabs = await browser.tabs.query({});
+    const activeTab = await browser.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+
     for (const tab of existingTabs) {
       if (tab.id) {
+        const isActive = activeTab[0]?.id === tab.id;
+        if (isActive) {
+          this.activeTabId = tab.id;
+        }
         this.frameMap.set(tab.id, {
           url: tab.url || "",
           frames: new Map([[0, { visible: true, url: tab.url || "" }]]),
-        });
-
-        this.notifyListeners({
-          type: "added",
-          tabId: tab.id,
-          frameId: 0,
-          currentState: {
-            url: tab.url || "",
-            visible: true,
-          },
+          active: isActive,
         });
       }
     }
@@ -231,9 +264,30 @@ export class TabFrameTracker {
     });
   }
 
-  // Helper methods
-  public getTabInfo(tabId: number): CoreTabInfo | undefined {
-    return this.frameMap.get(tabId);
+  public getActiveTab(): {
+    tabId: number;
+    tabInfo: {
+      url: string;
+      frames: Record<number, CoreFrameInfo>;
+      active: boolean;
+    };
+  } | null {
+    if (!this.activeTabId) return null;
+    const tabInfo = this.frameMap.get(this.activeTabId);
+    if (!tabInfo) return null;
+    return {
+      tabId: this.activeTabId,
+      tabInfo: {
+        url: tabInfo.url,
+        frames: Array.from(tabInfo.frames.entries()).map(
+          ([frameId, frameInfo]) => ({
+            ...frameInfo,
+            frameId,
+          })
+        ),
+        active: tabInfo.active,
+      },
+    };
   }
 
   public getFrameInfo(
@@ -241,6 +295,11 @@ export class TabFrameTracker {
     frameId: number
   ): CoreFrameInfo | undefined {
     return this.frameMap.get(tabId)?.frames.get(frameId);
+  }
+
+  // Helper methods
+  public getTabInfo(tabId: number): CoreTabInfo | undefined {
+    return this.frameMap.get(tabId);
   }
 
   public getAllTabs(): FrameMap {

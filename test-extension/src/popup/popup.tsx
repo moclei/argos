@@ -6,31 +6,39 @@ type TabInfo = {
   tabId: number;
   tabInfo: {
     url: string;
-  };
-  frames: Array<{
-    frameId: number;
-    frameInfo: {
+    active: boolean;
+    frames: Array<{
+      frameId: number;
       url: string;
       visible: boolean;
-    };
-  }>;
+    }>;
+  };
 };
 
 function Popup() {
   const [tabs, setTabs] = useState<TabInfo[]>([]);
+  const [port, setPort] = useState<browser.Runtime.Port | null>(null);
 
   useEffect(() => {
-    // const loadTabs = async () => {
-    //   const response = await browser.runtime.sendMessage({ type: "GET_TABS" });
-    //   console.log("response", response);
-    //   setTabs(response.payload.tabs);
-    // };
-    // loadTabs();
+    if (!port) {
+      console.log("[ARGOS TEST:POPUP] Establishing port and listener");
+      const port = browser.runtime.connect({ name: "argos-frame-tracker" });
+      port.onMessage.addListener((message) => {
+        if (message.type === "FRAME_VISIBILITY_CHANGE") {
+          console.log(
+            "[ARGOS TEST:POPUP] Frame visibility change: ",
+            message.payload
+          );
+          setTabs(message.payload.tabs);
+        }
+      });
+      setPort(port);
+    }
   }, []);
 
   const loadTabs = async () => {
     const response = await browser.runtime.sendMessage({ type: "GET_TABS" });
-    console.log("response: ", response);
+    console.log("[ARGOS TEST:POPUP] Tab/frames response: ", response);
     setTabs(Array.from(response.payload.tabs));
   };
 
@@ -44,10 +52,10 @@ function Popup() {
             <div>URL: {tab.tabInfo.url}</div>
             <h4>Frames:</h4>
             <ul>
-              {tab.frames.map((frame) => (
+              {tab.tabInfo.frames.map((frame) => (
                 <li key={frame.frameId}>
-                  Frame {frame.frameId}: {frame.frameInfo.url}
-                  {frame.frameInfo.visible ? " (visible)" : " (hidden)"}
+                  Frame {frame.frameId}: {frame.url}
+                  {frame.visible ? " (visible)" : " (hidden)"}
                 </li>
               ))}
             </ul>
@@ -64,6 +72,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const root = createRoot(rootDiv);
     root.render(<Popup />);
   } else {
-    console.error("rootDiv not found");
+    console.error("[ARGOS TEST:POPUP] rootDiv not found");
   }
 });
