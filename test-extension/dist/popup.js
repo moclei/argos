@@ -24553,14 +24553,29 @@
   var import_webextension_polyfill = __toESM(require_browser_polyfill());
   function Popup() {
     const [tabs, setTabs] = (0, import_react.useState)([]);
+    const [port, setPort] = (0, import_react.useState)(null);
     (0, import_react.useEffect)(() => {
+      if (!port) {
+        console.log("[ARGOS TEST:POPUP] Establishing port and listener");
+        const port2 = import_webextension_polyfill.default.runtime.connect({ name: "argos-frame-tracker" });
+        port2.onMessage.addListener((message) => {
+          if (message.type === "FRAME_VISIBILITY_CHANGE") {
+            console.log(
+              "[ARGOS TEST:POPUP] Frame visibility change: ",
+              message.payload
+            );
+            setTabs(message.payload.tabs);
+          }
+        });
+        setPort(port2);
+      }
     }, []);
     const loadTabs = async () => {
       const response = await import_webextension_polyfill.default.runtime.sendMessage({ type: "GET_TABS" });
-      console.log("response: ", response);
+      console.log("[ARGOS TEST:POPUP] Tab/frames response: ", response);
       setTabs(Array.from(response.payload.tabs));
     };
-    return /* @__PURE__ */ import_react.default.createElement("div", { className: "popup" }, /* @__PURE__ */ import_react.default.createElement("h2", null, "Frame Tracker Test"), tabs && tabs.map((tab) => /* @__PURE__ */ import_react.default.createElement("div", { key: tab.tabId, className: "tab" }, /* @__PURE__ */ import_react.default.createElement("h3", null, "Tab ", tab.tabId), /* @__PURE__ */ import_react.default.createElement("div", null, "URL: ", tab.tabInfo.url), /* @__PURE__ */ import_react.default.createElement("h4", null, "Frames:"), /* @__PURE__ */ import_react.default.createElement("ul", null, tab.frames.map((frame) => /* @__PURE__ */ import_react.default.createElement("li", { key: frame.frameId }, "Frame ", frame.frameId, ": ", frame.frameInfo.url, frame.frameInfo.visible ? " (visible)" : " (hidden)"))))), /* @__PURE__ */ import_react.default.createElement("button", { onClick: () => loadTabs() }, "Get Tabs"));
+    return /* @__PURE__ */ import_react.default.createElement("div", { className: "popup" }, /* @__PURE__ */ import_react.default.createElement("h2", null, "Frame Tracker Test"), tabs && tabs.map((tab) => /* @__PURE__ */ import_react.default.createElement("div", { key: tab.tabId, className: "tab" }, /* @__PURE__ */ import_react.default.createElement("h3", null, "Tab ", tab.tabId), /* @__PURE__ */ import_react.default.createElement("div", null, "URL: ", tab.tabInfo.url), /* @__PURE__ */ import_react.default.createElement("h4", null, "Frames:"), /* @__PURE__ */ import_react.default.createElement("ul", null, tab.tabInfo.frames.map((frame) => /* @__PURE__ */ import_react.default.createElement("li", { key: frame.frameId }, "Frame ", frame.frameId, ": ", frame.url, frame.visible ? " (visible)" : " (hidden)"))))), /* @__PURE__ */ import_react.default.createElement("button", { onClick: () => loadTabs() }, "Get Tabs"));
   }
   document.addEventListener("DOMContentLoaded", () => {
     const rootDiv = document.querySelector("#root");
@@ -24568,7 +24583,7 @@
       const root = (0, import_client.createRoot)(rootDiv);
       root.render(/* @__PURE__ */ import_react.default.createElement(Popup, null));
     } else {
-      console.error("rootDiv not found");
+      console.error("[ARGOS TEST:POPUP] rootDiv not found");
     }
   });
 })();

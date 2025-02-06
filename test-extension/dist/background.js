@@ -2047,7 +2047,7 @@
       var __toCommonJS = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
       var src_exports = {};
       __export(src_exports, {
-        StatefulTabFrameTracker: () => StatefulTabFrameTracker2
+        VisibleFrameTracker: () => VisibleFrameTracker2
       });
       module.exports = __toCommonJS(src_exports);
       var import_webextension_polyfill2 = __toESM2(require_browser_polyfill2());
@@ -2056,6 +2056,7 @@
         constructor() {
           this.frameMap = /* @__PURE__ */ new Map();
           this.listeners = /* @__PURE__ */ new Set();
+          this.activeTabId = null;
           this.initializeListeners();
         }
         notifyListeners(event) {
@@ -2070,7 +2071,8 @@
             if (tab.id) {
               this.frameMap.set(tab.id, {
                 url: tab.url || "",
-                frames: /* @__PURE__ */ new Map([[0, { visible: true, url: tab.url || "" }]])
+                frames: /* @__PURE__ */ new Map([[0, { visible: true, url: tab.url || "" }]]),
+                active: false
               });
               this.notifyListeners({
                 type: "added",
@@ -2078,8 +2080,29 @@
                 frameId: 0,
                 currentState: {
                   url: tab.url || "",
-                  visible: true
+                  visible: true,
+                  active: false
                 }
+              });
+            }
+          });
+          import_webextension_polyfill3.default.tabs.onActivated.addListener(async (activeInfo) => {
+            const previousTabId = this.activeTabId;
+            this.activeTabId = activeInfo.tabId;
+            if (previousTabId) {
+              const prevTab = this.frameMap.get(previousTabId);
+              if (prevTab) {
+                prevTab.active = false;
+              }
+            }
+            const newTab = this.frameMap.get(activeInfo.tabId);
+            if (newTab) {
+              newTab.active = true;
+              this.notifyListeners({
+                type: "tab_activated",
+                tabId: activeInfo.tabId,
+                previousState: { active: false },
+                currentState: { active: true }
               });
             }
           });
@@ -2181,20 +2204,20 @@
             }
           );
           const existingTabs = await import_webextension_polyfill3.default.tabs.query({});
+          const activeTab = await import_webextension_polyfill3.default.tabs.query({
+            active: true,
+            currentWindow: true
+          });
           for (const tab of existingTabs) {
             if (tab.id) {
+              const isActive = activeTab[0]?.id === tab.id;
+              if (isActive) {
+                this.activeTabId = tab.id;
+              }
               this.frameMap.set(tab.id, {
                 url: tab.url || "",
-                frames: /* @__PURE__ */ new Map([[0, { visible: true, url: tab.url || "" }]])
-              });
-              this.notifyListeners({
-                type: "added",
-                tabId: tab.id,
-                frameId: 0,
-                currentState: {
-                  url: tab.url || "",
-                  visible: true
-                }
+                frames: /* @__PURE__ */ new Map([[0, { visible: true, url: tab.url || "" }]]),
+                active: isActive
               });
             }
           }
@@ -2217,19 +2240,38 @@
             }
           });
         }
-        // Helper methods
-        getTabInfo(tabId) {
-          return this.frameMap.get(tabId);
+        getActiveTab() {
+          if (!this.activeTabId)
+            return null;
+          const tabInfo = this.frameMap.get(this.activeTabId);
+          if (!tabInfo)
+            return null;
+          return {
+            tabId: this.activeTabId,
+            tabInfo: {
+              url: tabInfo.url,
+              frames: Array.from(tabInfo.frames.entries()).map(
+                ([frameId, frameInfo]) => ({
+                  ...frameInfo,
+                  frameId
+                })
+              ),
+              active: tabInfo.active
+            }
+          };
         }
         getFrameInfo(tabId, frameId) {
           return this.frameMap.get(tabId)?.frames.get(frameId);
+        }
+        // Helper methods
+        getTabInfo(tabId) {
+          return this.frameMap.get(tabId);
         }
         getAllTabs() {
           return this.frameMap;
         }
       };
-      console.log("[ARGOS:CS] frame monitor mounted");
-      var frameMonitorContentScript = function() {
+      var frameMonitorContentScript = function(frameId) {
         console.log("[ARGOS:CS] frame monitor running");
         const VISIBILITY_CHECK_INTERVAL = 1e4;
         function isStyleHidden(element) {
@@ -2265,293 +2307,95 @@
           }
           return false;
         }
-        function checkFrameVisibility(frame) {
+        function checkVisibility() {
           try {
-            if (isStyleHidden(frame)) {
+            if (frameId === 0) {
+              return !isStyleHidden(document.body);
+            }
+            if (isStyleHidden(document.body)) {
               return false;
             }
-            if (isParentHidden(frame)) {
+            if (isParentHidden(document.body)) {
               return false;
             }
-            if (hasZeroDimension(frame)) {
+            if (hasZeroDimension(document.body)) {
               return false;
             }
-            if (!hasVisibleArea(frame)) {
+            if (!hasVisibleArea(document.body)) {
               return false;
             }
-            try {
-              const frameDoc = frame.contentDocument;
-              if (frameDoc && frameDoc.body) {
-                if (hasZeroDimension(frameDoc.body)) {
-                  return false;
-                }
-              }
-            } catch (e) {
-            }
-            const rect = frame.getBoundingClientRect();
+            const rect = document.body.getBoundingClientRect();
             if (rect.width < 2 && rect.height < 2) {
               return false;
             }
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
-            const elementAtPoint = document.elementFromPoint(centerX, centerY);
-            if (elementAtPoint && !frame.contains(elementAtPoint) && !elementAtPoint.contains(frame)) {
-              const coverageThreshold = 0.9;
-              const elementsAtCorners = [
-                document.elementFromPoint(rect.left + 2, rect.top + 2),
-                document.elementFromPoint(rect.right - 2, rect.top + 2),
-                document.elementFromPoint(rect.left + 2, rect.bottom - 2),
-                document.elementFromPoint(rect.right - 2, rect.bottom - 2)
-              ];
-              const coveredCorners = elementsAtCorners.filter(
-                (el) => el && !frame.contains(el) && !el.contains(frame)
-              ).length;
-              if (coveredCorners >= 3) {
-                return false;
-              }
-            }
-            console.log("[ARGOS:CS] checkFrameVisibility: true");
             return true;
           } catch (error) {
             console.warn("Error checking frame visibility:", error);
-            return true;
+            return false;
           }
         }
-        function setupFrameMonitoring() {
-          const frames = /* @__PURE__ */ new Map();
-          console.log("[ARGOS:CS] setupFrameMonitoring");
-          document.querySelectorAll("iframe").forEach((frame) => {
-            console.log("[ARGOS:CS] setupFrameMonitoring: initial frame discovery");
-            frames.set(
-              frame,
-              checkFrameVisibility(frame)
-            );
+        const isVisible = checkVisibility();
+        const observer = new MutationObserver(() => {
+          const newVisible = checkVisibility();
+          chrome.runtime.sendMessage({
+            type: "frameVisibilityChange",
+            frameId,
+            visible: newVisible
           });
-          const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-              mutation.addedNodes.forEach((node) => {
-                if (node instanceof HTMLIFrameElement) {
-                  console.log(
-                    "[ARGOS:CS] mutation : added node, checking frame visibility"
-                  );
-                  frames.set(node, checkFrameVisibility(node));
-                }
-              });
-              mutation.removedNodes.forEach((node) => {
-                if (node instanceof HTMLIFrameElement) {
-                  console.log("[ARGOS:CS] mutation : removed node");
-                  frames.delete(node);
-                }
-              });
-            });
-          });
-          observer.observe(document.body, {
-            childList: true,
-            subtree: true
-          });
-          const intersectionObserver = new IntersectionObserver(
-            (entries) => {
-              entries.forEach((entry) => {
-                if (entry.target instanceof HTMLIFrameElement) {
-                  const frame = entry.target;
-                  console.log(
-                    "[ARGOS:CS] intersection observer : checking frame visibility"
-                  );
-                  const isVisible = checkFrameVisibility(frame);
-                  if (frames.get(frame) !== isVisible) {
-                    frames.set(frame, isVisible);
-                    chrome.runtime.sendMessage({
-                      type: "frameVisibilityChange",
-                      frameId: frame.src,
-                      visible: isVisible
-                    });
-                  }
-                }
-              });
-            },
-            {
-              threshold: [0, 0.1, 0.5, 1]
-              // Check at different visibility thresholds
-            }
-          );
-          setInterval(() => {
-            frames.forEach((oldVisible, frame) => {
-              const newVisible = checkFrameVisibility(frame);
-              console.log(`[ARGOS:CS:${frame.id}] periodic visibility checking`, {
-                src: frame.src,
-                visible: newVisible
-              });
-              if (oldVisible !== newVisible) {
-                console.log(`[ARGOS:CS:${frame.id}] found visibility change!`);
-                frames.set(frame, newVisible);
-                chrome.runtime.sendMessage({
-                  type: "frameVisibilityChange",
-                  frameId: frame.src,
-                  visible: newVisible
-                });
-              }
-            });
-          }, VISIBILITY_CHECK_INTERVAL);
-          return {
-            success: true,
-            frames: Array.from(frames, ([key, value]) => ({
-              frameId: key.src,
-              visible: value
-            }))
-          };
+        });
+        observer.observe(document.body, {
+          attributes: true,
+          attributeFilter: ["style", "class"],
+          childList: false,
+          subtree: false
+        });
+        function cleanup() {
+          observer.disconnect();
         }
-        return setupFrameMonitoring();
+        chrome.runtime.onMessage.addListener((message) => {
+          if (message.type === "cleanup" && message.frameId === frameId) {
+            cleanup();
+          }
+        });
+        return {
+          success: true,
+          frameId,
+          visible: isVisible
+        };
       };
-      var StatefulTabFrameTracker2 = class extends TabFrameTracker {
+      var VisibleFrameTracker2 = class extends TabFrameTracker {
         constructor(options = {}) {
           super();
-          this.tabStates = /* @__PURE__ */ new Map();
-          this.frameSignatureMap = /* @__PURE__ */ new Map();
           this.useInjection = false;
           this.hasScriptingPermission = false;
           this.useInjection = options.useInjection ?? false;
-          this.framePollingOptions = {
-            enabled: false,
-            interval: 5e3,
-            includeChildFrames: true,
-            ...options.framePolling
-          };
-          this.defaultTabState = options.defaultTabState;
-          this.defaultFrameState = options.defaultFrameState;
           this.initialize();
         }
         async initialize() {
           const permissions = await import_webextension_polyfill2.default.permissions.getAll();
           this.hasScriptingPermission = permissions.permissions?.includes("scripting") || false;
-          console.log(
-            "Initializing StatefulTabFrameTracker",
-            {
-              hasScriptingPermission: this.hasScriptingPermission,
-              useInjection: this.useInjection
-            },
-            this.framePollingOptions
-          );
+          console.log("Initializing StatefulTabFrameTracker", {
+            hasScriptingPermission: this.hasScriptingPermission,
+            useInjection: this.useInjection
+          });
           if (this.hasScriptingPermission && this.useInjection) {
             await this.initializeContentScriptSupport();
-          } else if (this.framePollingOptions.enabled) {
-            await this.initializeFramePolling();
           }
-          if (this.defaultTabState) {
-            const existingTabs = await import_webextension_polyfill2.default.tabs.query({});
-            for (const tab of existingTabs) {
-              if (tab.id && !this.tabStates.has(tab.id)) {
-                this.tabStates.set(tab.id, {
-                  tabData: { ...this.defaultTabState },
-                  frameStates: /* @__PURE__ */ new Map()
-                });
-              }
-            }
-          }
-        }
-        async initializeFramePolling() {
-          if (!this.framePollingOptions.enabled)
-            return;
-          const pollFrames = async () => {
-            const tabs = await import_webextension_polyfill2.default.tabs.query({});
-            for (const tab of tabs) {
-              if (!tab.id)
-                continue;
-              try {
-                const frames = await import_webextension_polyfill2.default.webNavigation.getAllFrames({
-                  tabId: tab.id
-                });
-                if (!frames)
-                  continue;
-                const tabInfo = this.frameMap.get(tab.id);
-                if (!tabInfo)
-                  continue;
-                const currentFrameIds = /* @__PURE__ */ new Set();
-                for (const frame of frames) {
-                  currentFrameIds.add(frame.frameId);
-                  const existingFrame = tabInfo.frames.get(frame.frameId);
-                  const frameUrl = frame.url;
-                  if (!existingFrame) {
-                    tabInfo.frames.set(frame.frameId, {
-                      visible: true,
-                      url: frameUrl,
-                      parentFrameId: frame.parentFrameId >= 0 ? frame.parentFrameId : void 0
-                    });
-                    if (this.defaultFrameState) {
-                      const tabState = this.tabStates.get(tab.id);
-                      if (tabState && !tabState.frameStates.has(frame.frameId)) {
-                        tabState.frameStates.set(frame.frameId, {
-                          ...this.defaultFrameState
-                        });
-                      }
-                    }
-                    this.notifyListeners({
-                      type: "added",
-                      tabId: tab.id,
-                      frameId: frame.frameId,
-                      currentState: {
-                        visible: true,
-                        url: frameUrl
-                      }
-                    });
-                  } else if (existingFrame.url !== frameUrl) {
-                    const previousUrl = existingFrame.url;
-                    existingFrame.url = frameUrl;
-                    this.notifyListeners({
-                      type: "modified",
-                      tabId: tab.id,
-                      frameId: frame.frameId,
-                      previousState: { url: previousUrl },
-                      currentState: { url: frameUrl }
-                    });
-                  }
-                }
-                for (const [frameId, frameInfo] of tabInfo.frames) {
-                  if (!currentFrameIds.has(frameId) && frameId !== 0) {
-                    tabInfo.frames.delete(frameId);
-                    const tabState = this.tabStates.get(tab.id);
-                    if (tabState) {
-                      tabState.frameStates.delete(frameId);
-                    }
-                    this.notifyListeners({
-                      type: "removed",
-                      tabId: tab.id,
-                      frameId,
-                      previousState: {
-                        url: frameInfo.url,
-                        visible: frameInfo.visible
-                      }
-                    });
-                  }
-                }
-              } catch (error) {
-                console.error(`Error polling frames for tab ${tab.id}:`, error);
-              }
-            }
-          };
-          await pollFrames();
-          this.pollingInterval = window.setInterval(
-            pollFrames,
-            this.framePollingOptions.interval
-          );
         }
         async initializeContentScriptSupport() {
-          console.log("[ARGOS:BG] initializeContentScriptSupport()");
+          console.log("[FrameTracker] initializeContentScriptSupport()");
           import_webextension_polyfill2.default.runtime.onMessage.addListener(
             (message, sender) => {
               if (message.type === "frameVisibilityChange") {
-                console.log(
-                  "[SHR:BG] StatefulTabFrameTracker, frameVisibilityChange: ",
-                  message
-                );
+                console.log("[FrameTracker] frameVisibilityChange heard: ", message);
                 const tabId = sender.tab?.id;
-                if (!tabId)
-                  return;
-                const frameSignature = message.frameId;
+                if (!tabId || tabId !== this.activeTabId)
+                  return true;
                 const tabInfo = this.frameMap.get(tabId);
                 if (!tabInfo)
-                  return;
+                  return true;
                 const frameEntry = Array.from(tabInfo.frames.entries()).find(
-                  ([_, frameInfo]) => frameInfo.url === frameSignature
+                  ([_, frameInfo]) => frameInfo.url === message.frameId
                 );
                 if (frameEntry) {
                   const [frameId, frameInfo] = frameEntry;
@@ -2563,7 +2407,7 @@
             }
           );
           this.subscribe(async (event) => {
-            if (event.type === "modified" && event.frameId === 0) {
+            if ((event.type === "modified" || event.type === "tab_activated") && event.tabId === this.activeTabId) {
               await new Promise((resolve) => setTimeout(resolve, 1e3));
               try {
                 const tab = await import_webextension_polyfill2.default.tabs.get(event.tabId);
@@ -2576,74 +2420,40 @@
               }
             }
           });
-          const existingTabs = await import_webextension_polyfill2.default.tabs.query({});
-          for (const tab of existingTabs) {
-            if (tab.id) {
-              await this.injectContentScript(tab);
-            }
-          }
         }
         async injectContentScript(tab) {
-          if (!this.useInjection || !tab.id)
+          if (!this.useInjection || !tab.id || tab.id !== this.activeTabId)
             return;
-          try {
-            const frameMonitorResult = await import_webextension_polyfill2.default.scripting.executeScript({
-              target: { tabId: tab.id },
-              func: frameMonitorContentScript
-            });
-            const frameResult = frameMonitorResult[0]?.result;
-            if (frameResult?.success && frameResult.frames) {
-              console.log(
-                `[ARGOS:BG] Got initial frame visibility for tab ${tab.id}`,
-                frameResult.frames
-              );
-              const tabInfo = this.frameMap.get(tab.id);
-              console.log(`[ARGOS:BG] Got tabInfo for comparison `, tabInfo);
-              if (!tabInfo)
-                return;
-              frameResult.frames.forEach((frame) => {
-                const frameEntry = Array.from(tabInfo.frames.entries()).find(
-                  ([_, frameInfo]) => frameInfo.url === frame.frameId
-                );
-                console.log(`[ARGOS:BG] Found frameEntry for comparison`, frameEntry);
-                if (frameEntry) {
-                  console.log(`[ARGOS:BG] Found matching frame entry`, frameEntry);
-                  const [frameId, frameInfo] = frameEntry;
-                  frameInfo.visible = frame.visible;
-                  this.handleFrameVisibilityChange({
-                    frameId,
-                    tabId: tab.id,
-                    visible: frame.visible
-                  });
-                }
+          const tabInfo = this.frameMap.get(tab.id);
+          if (!tabInfo)
+            return;
+          for (const [frameId, frameInfo] of tabInfo.frames) {
+            console.log("injecting content script into frame: ", frameId);
+            try {
+              const result = await import_webextension_polyfill2.default.scripting.executeScript({
+                target: { tabId: tab.id, frameIds: [frameId] },
+                func: frameMonitorContentScript,
+                args: [frameId]
               });
-            }
-          } catch (error) {
-            console.warn(
-              `[ARGOS:BG] Failed to inject content script into tab ${tab.id}: ${tab.url}:`,
-              error
-            );
-            if (this.framePollingOptions.enabled) {
-              console.log(
-                `[ARGOS:BG] Script execution not enabled, falling back to polling for tab ${tab.id}`
+              console.log("raw frameMonitorResult: ", result);
+              if (result[0]?.result?.success) {
+                frameInfo.visible = result[0]?.result.visible;
+                this.handleFrameVisibilityChange({
+                  frameId,
+                  tabId: tab.id,
+                  visible: result[0]?.result.visible
+                });
+              }
+            } catch (error) {
+              console.warn(
+                `[ARGOS:BG] Failed to inject content script into tab ${tab.id}: ${tab.url}:`,
+                error
               );
-              this.pollFramesForTab(tab.id);
             }
-          }
-        }
-        async pollFramesForTab(tabId) {
-          try {
-            const frames = await import_webextension_polyfill2.default.webNavigation.getAllFrames({ tabId });
-            if (!frames)
-              return;
-            const tabInfo = this.frameMap.get(tabId);
-            if (!tabInfo)
-              return;
-          } catch (error) {
-            console.warn(`Failed to poll frames for tab ${tabId}:`, error);
           }
         }
         handleFrameVisibilityChange(message) {
+          console.log("[FrameTracker] handleFrameVisibilityChange()");
           const { frameId, tabId, visible } = message;
           const frameInfo = this.getFrameInfo(tabId, frameId);
           if (frameInfo) {
@@ -2657,137 +2467,6 @@
             });
           }
         }
-        setFrameVisibility(tabId, frameId, visible) {
-          const frameInfo = this.getFrameInfo(tabId, frameId);
-          if (frameInfo) {
-            frameInfo.visible = visible;
-            this.notifyListeners({
-              type: "modified",
-              tabId,
-              frameId,
-              previousState: { visible: !visible },
-              currentState: { visible }
-            });
-          }
-        }
-        // State management methods
-        setTabState(tabId, state) {
-          const existing = this.tabStates.get(tabId);
-          if (!existing) {
-            if (this.isFullState(state)) {
-              this.tabStates.set(tabId, {
-                tabData: state,
-                frameStates: /* @__PURE__ */ new Map()
-              });
-            } else if (this.defaultTabState) {
-              this.tabStates.set(tabId, {
-                tabData: { ...this.defaultTabState, ...state },
-                frameStates: /* @__PURE__ */ new Map()
-              });
-            } else {
-              throw new Error("Initial state must be a full state");
-            }
-          } else {
-            this.tabStates.set(tabId, {
-              tabData: { ...existing.tabData, ...state },
-              frameStates: existing.frameStates
-            });
-          }
-        }
-        setFrameState(tabId, frameId, state) {
-          let tabState = this.tabStates.get(tabId);
-          if (!tabState && this.defaultFrameState) {
-            tabState = {
-              tabData: { ...this.defaultTabState },
-              frameStates: /* @__PURE__ */ new Map()
-            };
-            this.tabStates.set(tabId, tabState);
-          }
-          if (!tabState)
-            return;
-          const existingFrameState = tabState.frameStates.get(frameId);
-          if (!existingFrameState) {
-            if (this.isFullState(state)) {
-              tabState.frameStates.set(frameId, state);
-            } else if (this.defaultFrameState) {
-              tabState.frameStates.set(frameId, {
-                ...this.defaultFrameState,
-                ...state
-              });
-            } else {
-              throw new Error("Initial frame state must be a full state");
-            }
-          } else {
-            tabState.frameStates.set(frameId, {
-              ...existingFrameState,
-              ...state
-            });
-          }
-        }
-        isFullState(state) {
-          const requiredKeys = Object.keys(this.getTypeTemplate());
-          const stateKeys = Object.keys(state);
-          return requiredKeys.every((key) => stateKeys.includes(key));
-        }
-        getTypeTemplate() {
-          return {};
-        }
-        getTabState(tabId) {
-          return this.tabStates.get(tabId)?.tabData ?? this.defaultTabState;
-        }
-        getFrameState(tabId, frameId) {
-          const tabState = this.tabStates.get(tabId);
-          return tabState?.frameStates.get(frameId) ?? this.defaultFrameState;
-        }
-        // Query methods for tab states
-        getAllTabsWithState() {
-          const result = /* @__PURE__ */ new Map();
-          for (const [tabId, tabState] of this.tabStates) {
-            const tabInfo = this.frameMap.get(tabId);
-            if (!tabInfo)
-              continue;
-            result.set(tabId, {
-              tabState: tabState.tabData,
-              frames: new Map(
-                Array.from(tabInfo.frames.entries()).map(([frameId, frameInfo]) => [
-                  frameId,
-                  {
-                    frameInfo,
-                    state: tabState.frameStates.get(frameId)
-                  }
-                ])
-              )
-            });
-          }
-          return result;
-        }
-        queryTabs(predicate) {
-          const result = /* @__PURE__ */ new Map();
-          for (const [tabId, tabState] of this.tabStates) {
-            if (predicate(tabState.tabData)) {
-              const tabInfo = this.frameMap.get(tabId);
-              if (!tabInfo)
-                continue;
-              result.set(tabId, {
-                tabState: tabState.tabData,
-                frames: new Map(
-                  Array.from(tabInfo.frames.entries()).map(([frameId, frameInfo]) => [
-                    frameId,
-                    { frameInfo, state: tabState.frameStates.get(frameId) }
-                  ])
-                )
-              });
-            }
-          }
-          return result;
-        }
-        // Override cleanup to handle state
-        dispose() {
-          if (this.pollingInterval) {
-            clearInterval(this.pollingInterval);
-          }
-          this.tabStates.clear();
-        }
       };
     }
   });
@@ -2795,44 +2474,50 @@
   // src/background.ts
   var import_webextension_polyfill = __toESM(require_browser_polyfill());
   var import_argos = __toESM(require_dist());
-  var tracker = new import_argos.StatefulTabFrameTracker({
-    useInjection: true,
-    defaultTabState: {
-      activatedDate: 0,
-      isActive: false
-    },
-    defaultFrameState: {
-      scanning: false
-    }
+  var tracker = new import_argos.VisibleFrameTracker({
+    useInjection: true
   });
   import_webextension_polyfill.default.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "GET_TABS") {
       console.log(`[ARGOS TEST:BG] Message received:`, message);
-      console.log(`[ARGOS TEST:BG] tracker.getAllTabs():`, tracker.getAllTabs());
-      const tabArray = [];
-      tracker.getAllTabs().forEach((value, key) => {
-        const frameArray = Array.from(value.frames.entries()).map(
-          ([frameId, frameInfo]) => {
-            return {
-              frameId,
-              frameInfo
-            };
-          }
-        );
-        if (value.url.includes("google.com")) {
-          tabArray.push({
-            tabId: key,
-            tabInfo: value,
-            frames: frameArray
-          });
-        }
-      });
-      console.log(`[ARGOS TEST:BG] tracker.getAllTabs():`, tabArray);
+      const activeTab = tracker.getActiveTab();
+      console.log(`[ARGOS TEST:BG] tracker.getActiveTab():`, activeTab);
       sendResponse({
         type: "TAB_RESPONSE",
-        payload: { tabs: tabArray }
+        payload: { tabs: [activeTab] }
       });
     }
   });
+  tracker.subscribe((event) => {
+    console.log(`[ARGOS TEST:BG] Event received:`, event);
+    if (event.type === "visibility_changed") {
+      popupPort?.postMessage({
+        type: "FRAME_VISIBILITY_CHANGE",
+        payload: {
+          tabs: [tracker.getActiveTab()]
+        }
+      });
+    }
+  });
+  var popupPort = null;
+  import_webextension_polyfill.default.runtime.onConnect.addListener((port) => {
+    if (port.name === "argos-frame-tracker") {
+      console.log(`[ARGOS TEST:BG] Popup port connected`);
+      port.postMessage({
+        type: "FRAME_VISIBILITY_CHANGE",
+        payload: {
+          tabs: [tracker.getActiveTab()]
+        }
+      });
+      console.log(`[ARGOS TEST:BG] Initial message sent`);
+      popupPort = port;
+    }
+  });
+  if (popupPort) {
+    popupPort.onDisconnect.addListener(() => {
+      console.log(`[ARGOS TEST:BG] Popup port disconnected`);
+      popupPort = null;
+    });
+  }
 })();
 //# sourceMappingURL=background.js.map
